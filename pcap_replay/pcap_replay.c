@@ -999,26 +999,25 @@ gboolean restart_server(Pcap_Replay* pcapReplay) {
 	/* UNCOMMENT IF YOU WANT THE CONNECTION TO BE CLOSED 
 	 * AND RESTARTED AFTER EACH PCAP FILE */
 
-	/*
 	// Finish the connection if not already done 
 	shutdown(pcapReplay->server.sd,2);
 	close(pcapReplay->server.sd);
-	*/
+	return FALSE;
 
-	// renew pcap descriptor in use
-	if(!change_pcap_file_to_send(pcapReplay)) {
-		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot change pcap file to send ! Exiting");
-		return FALSE;
-	};
-	// Load the first packet into the current state
-	if(!get_next_packet(pcapReplay)) {
-		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot find a matching packet in the pcap file ! Exiting");
-		return FALSE;
-	}
-	// Sleep for ts seconds to make sure connection/port have been released
-	nanosleep((const struct timespec*)&ts,NULL); 
-	pcapReplay->isAllowedToSend = FALSE; // Need to wait for the first packet of the client !
-	pcapReplay->isFirstPacketReceived=FALSE;
+	// // renew pcap descriptor in use
+	// if(!change_pcap_file_to_send(pcapReplay)) {
+	// 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot change pcap file to send ! Exiting");
+	// 	return FALSE;
+	// };
+	// // Load the first packet into the current state
+	// if(!get_next_packet(pcapReplay)) {
+	// 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot find a matching packet in the pcap file ! Exiting");
+	// 	return FALSE;
+	// }
+	// // Sleep for ts seconds to make sure connection/port have been released
+	// nanosleep((const struct timespec*)&ts,NULL); 
+	// pcapReplay->isAllowedToSend = FALSE; // Need to wait for the first packet of the client !
+	// pcapReplay->isFirstPacketReceived=FALSE;
 
 	/* UNCOMMENT IF YOU WANT THE CONNECTION TO BE CLOSED 
 	 * AND RESTARTED AFTER SENDING EACH PCAP FILE */
@@ -1034,7 +1033,7 @@ gboolean restart_server(Pcap_Replay* pcapReplay) {
 	}
 	*/
 
-	return TRUE;
+	// return TRUE;
 
 }
 
@@ -1046,25 +1045,24 @@ gboolean restart_client(Pcap_Replay* pcapReplay) {
 	/* UNCOMMENT IF YOU WANT THE CONNECTION TO BE CLOSED 
 	 * AND RESTARTED AFTER SENDING EACH PCAP FILE */
 
-	/*
 	// Finish the connection if not already done 
 	shutdown(pcapReplay->client.sd,2);
 	close(pcapReplay->client.sd);
-	*/
+	return FALSE;
 
-	// renew pcap descriptor in use
-	if(!change_pcap_file_to_send(pcapReplay)) {
-		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot change pcap file to send ! Exiting");
-		return FALSE;
-	};
+	// // renew pcap descriptor in use
+	// if(!change_pcap_file_to_send(pcapReplay)) {
+	// 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot change pcap file to send ! Exiting");
+	// 	return FALSE;
+	// };
 
-	if(!get_next_packet(pcapReplay)) {
-		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot find a matching packet in the pcap file ! Exiting");
-		return FALSE;
-	}
+	// if(!get_next_packet(pcapReplay)) {
+	// 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot find a matching packet in the pcap file ! Exiting");
+	// 	return FALSE;
+	// }
 
-	// Sleep for timeToWait before isRestarting the client 
-	nanosleep((const struct timespec*)&timewait,NULL); 
+	// // Sleep for timeToWait before isRestarting the client 
+	// nanosleep((const struct timespec*)&timewait,NULL); 
 
 	/* UNCOMMENT IF YOU WANT THE CONNECTION TO BE CLOSED 
 	 * AND RESTARTED AFTER EACH PCAP FILE */
@@ -1092,7 +1090,7 @@ gboolean restart_client(Pcap_Replay* pcapReplay) {
 	}
 	*/
 
-	return TRUE;
+	// return TRUE;
 }
 
 gboolean initiate_conn_to_proxy(Pcap_Replay* pcapReplay) {
