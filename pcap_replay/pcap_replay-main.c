@@ -27,7 +27,7 @@ static const gchar* _pcapmain_logLevelToString(GLogLevelFlags logLevel) {
 
 static void _pcapmain_logHandler(const gchar *logDomain, GLogLevelFlags logLevel,
         const gchar *message, gpointer userData) {
-    if(logLevel > G_LOG_LEVEL_INFO) {
+    if(logLevel > G_LOG_LEVEL_WARNING) {
         return;
     }
     g_print("%s\n", message);
