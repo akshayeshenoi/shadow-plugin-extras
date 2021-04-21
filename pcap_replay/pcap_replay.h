@@ -81,9 +81,8 @@ typedef struct _Pcap_Replay {
 	/* IP & ports used by the client/server in the pcap file */
 	/* These are used to pick the right packets in the pcap file */
 	struct in_addr client_IP_in_pcap;
-	gushort client_port_in_pcap;
-	struct in_addr server_IP_in_pcap;
-	gushort server_port_in_pcap;
+	struct in_addr pcap_local_nw_addr;
+	guint32 pcap_local_nw_mask;
 
 	struct {	 
 		int sd; /* Socket descriptor to connect to distant server */

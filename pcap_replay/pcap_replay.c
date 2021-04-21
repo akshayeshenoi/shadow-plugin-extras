@@ -596,6 +596,9 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 /* The pcap_replay_new() function creates a new instance of the pcap replayer plugin 
  * The instance can either be a server waiting for a client or a client connecting to the pcap server. */
 Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) {
+	/* Expected args:
+		./pcap_replay-exe <node-type> <server-host> <server-port> <pcap_client_ip> <pcap_nw_addr> <pcap_nw_mask> <timeout> <pcap_trace1> <pcap_trace2>.. 
+	*/
 	g_assert(slogf);
 	gboolean is_instanciation_done = FALSE; 
 	gint arg_idx = 1;
@@ -618,7 +621,6 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 		pcapReplay->proxyPort = htons(atoi(argv[arg_idx++]));
 		/* use loopback addr to connect to the Socks Tor proxy */
 		pcapReplay->proxyIP = htonl(INADDR_LOOPBACK); 
-
 	}
 
 	/* Get the remote server name & port */
@@ -638,19 +640,19 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 		pcap_replay_free(pcapReplay);
 		return NULL;
 	}
-	// Get client port used in pcap file
-	pcapReplay->client_port_in_pcap = (gushort) atoi(argv[arg_idx++]);
 
-	// Get server IP addr used in the pcap file
-	if(inet_aton(argv[arg_idx++], &pcapReplay->server_IP_in_pcap) == 0) {
+	// Get local network address
+	if(inet_aton(argv[arg_idx++], &pcapReplay->pcap_local_nw_addr) == 0) {
 		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-					"Cannot get the server IP used in pcap file : Err in the arguments ");
+					"Cannot get the client IP used in pcap file : Err in the arguments ");
 		pcap_replay_free(pcapReplay);
 		return NULL;
 	}
-	// Get server port used in pcap file
-	pcapReplay->server_port_in_pcap = (gushort) atoi(argv[arg_idx++]);
 
+	// Get local network address mask (2^(32 - mask))
+	pcapReplay->pcap_local_nw_mask = (guint32) 1 << (32 - atoi(argv[arg_idx++]));
+
+	// return NULL;
 	// Get the timeout of the experiment
 	GDateTime* dt = g_date_time_new_now_local();
 	pcapReplay->timeout = atoi(argv[arg_idx++]) + g_date_time_to_unix(dt);
@@ -892,36 +894,43 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay) {
 
 		// Client scenario
 		if(pcapReplay->isClient) {
-			// check if this packet srcIP,destIP,destPort correspond to the arguments
-			if(pcapReplay->client_IP_in_pcap.s_addr == ip->ip_src.s_addr) {
-				if(pcapReplay->server_IP_in_pcap.s_addr == ip->ip_dst.s_addr) {
-					//if((ntohs(tcp->th_dport) == pcapReplay->server_port_in_pcap)) {
-						pcapReplay->nextPacket = g_new0(Custom_Packet_t, 1);
-						pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Found at least one matching packet in next_packet");
-						exists = TRUE;
-						pcapReplay->nextPacket->timestamp.tv_sec = header->ts.tv_sec;
-						pcapReplay->nextPacket->timestamp.tv_usec = header->ts.tv_usec;
-						pcapReplay->nextPacket->payload_size = size_payload;
-						pcapReplay->nextPacket->payload = payload;
-						break;
-					//}
+			// next packet must be one with ip.src == client_IP_in_pcap.s_addr
+			if(ip->ip_src.s_addr == pcapReplay->client_IP_in_pcap.s_addr) {
+				// AND ip.dst must not be a local address (e.g., should not belong to 192.168.0.0/16)
+				// or (ip.dst < pcapReplay->local_net_addr OR ip.dst > pcapReplay->local_net_addr + pcapReplay->local_net_mask)
+				if( ntohl(ip->ip_dst.s_addr) < ntohl(pcapReplay->pcap_local_nw_addr.s_addr)
+					|| ntohl(ip->ip_dst.s_addr) > ntohl(pcapReplay->pcap_local_nw_addr.s_addr) + pcapReplay->pcap_local_nw_mask) {
+
+					pcapReplay->nextPacket = g_new0(Custom_Packet_t, 1);
+					pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Found at least one matching packet in next_packet. Destination -> %s",
+						inet_ntoa(ip->ip_dst));
+					exists = TRUE;
+					pcapReplay->nextPacket->timestamp.tv_sec = header->ts.tv_sec;
+					pcapReplay->nextPacket->timestamp.tv_usec = header->ts.tv_usec;
+					pcapReplay->nextPacket->payload_size = size_payload;
+					pcapReplay->nextPacket->payload = payload;
+					break;
 				}
 			}	
 		} 
 		// Server scenario 
 		else {
-			if(pcapReplay->server_IP_in_pcap.s_addr == ip->ip_src.s_addr) {
-				if(pcapReplay->client_IP_in_pcap.s_addr == ip->ip_dst.s_addr) {
-					//if((ntohs(tcp->th_dport) == pcapReplay->client_port_in_pcap)) {
-						pcapReplay->nextPacket = g_new0(Custom_Packet_t, 1);
-						pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Found at least one matching packet in next_packet");
-						exists = TRUE;
-						pcapReplay->nextPacket->timestamp.tv_sec = header->ts.tv_sec;
-						pcapReplay->nextPacket->timestamp.tv_usec = header->ts.tv_usec;
-						pcapReplay->nextPacket->payload_size = size_payload;
-						pcapReplay->nextPacket->payload = payload;
-						break;
-					//}
+			// ip.src must not be a local address (e.g., should not belong to 192.168.0.0/16)
+			// or (ip.src < pcapReplay->local_net_addr OR ip.src > pcapReplay->local_net_addr + pcapReplay->local_net_mask)
+			if(ntohl(ip->ip_src.s_addr) < ntohl(pcapReplay->pcap_local_nw_addr.s_addr)
+				|| ntohl(ip->ip_src.s_addr) > ntohl(pcapReplay->pcap_local_nw_addr.s_addr) + pcapReplay->pcap_local_nw_mask) {
+				// AND next packet must be one with ip.dst == client_IP_in_pcap.s_addr (reverse flow) 
+				if(ip->ip_dst.s_addr == pcapReplay->client_IP_in_pcap.s_addr) {
+
+					pcapReplay->nextPacket = g_new0(Custom_Packet_t, 1);
+					pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Found at least one matching packet in next_packet. Destination -> %s",
+						inet_ntoa(ip->ip_dst));
+					exists = TRUE;
+					pcapReplay->nextPacket->timestamp.tv_sec = header->ts.tv_sec;
+					pcapReplay->nextPacket->timestamp.tv_usec = header->ts.tv_usec;
+					pcapReplay->nextPacket->payload_size = size_payload;
+					pcapReplay->nextPacket->payload = payload;
+					break;
 				}
 			}		
 		}
