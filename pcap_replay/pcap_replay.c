@@ -265,7 +265,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		inet_ntop(AF_INET, &(clientaddr.sin_addr), ip_add, len);
 
 
-		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
 						"Client connected on server with address : %s ", ip_add	);
 
 
@@ -504,7 +504,7 @@ gboolean pcap_StartClientTor(Pcap_Replay* pcapReplay) {
 				"unable to start control socket: error in connect");
 		return FALSE;
 	}	
-	pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
 				"Connected to Tor socket port 9000 !");
 
 	/* Initiate the connection to the Tor proxy.
