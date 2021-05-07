@@ -48,6 +48,7 @@ typedef struct _Pcap_Replay {
 	guint64 timeout;
 
 	gboolean isClient; /* client or server */
+	gboolean isVpn; /* flag that allows encapsulation */
 	gboolean isTorClient; /* normal client or tor-client */
 	gboolean isAllowedToSend;
 	gboolean isFirstPacketReceived;

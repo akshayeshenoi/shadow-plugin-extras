@@ -1,7 +1,9 @@
 # "pcap-replay": A Shadow plug-in (tweaked)
 =================================
 
-The purpose of this plug-in is to replay network traffic saved in pcap files. The execution of the plug-in is quiet simple. There is one server and one client. The server is started first and waits for the client to connect. When started, the client connects to the server and both of them start replaying the network traffic saved in the pcap file(s) based on the arguments supplied. The client can either be a normal client or a tor-client. If run as a tor-client, the plugin needs to connect to the Tor proxy before transmitting to the server. So make sure you are running the tor & torctl plug-in along with your tor-client when running your experiment. Moreover, check that the tor plugin opens its SocksPort when starting. 
+The purpose of this plug-in is to replay network traffic saved in pcap files. The execution of the plug-in is quiet simple. There is one server and one client. The server is started first and waits for the client to connect. When started, the client connects to the server and both of them start replaying the network traffic saved in the pcap file(s) based on the arguments supplied. Note that only TCP packet payloads are replayed. The client can either be a normal client or a tor-client. If run as a tor-client, the plugin needs to connect to the Tor proxy before transmitting to the server. So make sure you are running the tor & torctl plug-in along with your tor-client when running your experiment. Moreover, check that the tor plugin opens its SocksPort when starting. 
+
+We can also configure client to operate in a VPN mode where both UDP and TCP traffic is tunneled over a TCP connection - including the headers.
 
 The plug-in is bundled with an example that can serve as a starting point.
 
@@ -18,7 +20,7 @@ The plugin is primarily driven by the arguments supplied to it.
 ./shadow-plugin-pcap_replay-exe <node-type> <server-host> <server-port> <pcap_client_ip> <pcap_nw_addr> <pcap_nw_mask> <timeout> <pcap_trace1> <pcap_trace2>.. 
 ```
 
-- **node-type**: Takes a value `client | client-tor | server`.
+- **node-type**: Takes a value `client | client-tor | client-vpn | server`. If the argument is `client-tor`, the subsequent arguement must be the tor proxy port. If the argument is `client-vpn`, UDP and TCP traffic is tunneled over a TCP connection.
 - **server-host, server-port**: The hostname and port the server binds to and the client connects to.
 - **pcap_client_ip**: The client IP and port in the pcap file that _our_ client must replay. 
 - **pcap_nw_addr, pcap_nw_mask**: The destination IP in the packet must NOT belong to this network mask (e.g., 192.168.0.0/16). We do this to simulate traffic sending to all destinations originating from a particular host.

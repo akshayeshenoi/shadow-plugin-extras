@@ -6,7 +6,7 @@
 
 #define MAGIC 0xFFEEDDCC
 
-const gchar* USAGE = "USAGE: 'client'|'client-tor|'server' [SocksPort] serverHostName serverPort IP_client_in_pcap Port_client IP_server_in_pcap Port_server timeout [file.pcap,...]\n";
+const gchar* USAGE = "USAGE: <node-type> <server-host> <server-port> <pcap_client_ip> <pcap_nw_addr> <pcap_nw_mask> <timeout> <pcap_trace1> <pcap_trace2>..\n";
 
 /* pcap_activateClient() is called when the epoll descriptor has an event for the client */
 void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
@@ -601,6 +601,7 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) {
 	/* Expected args:
 		./pcap_replay-exe <node-type> <server-host> <server-port> <pcap_client_ip> <pcap_nw_addr> <pcap_nw_mask> <timeout> <pcap_trace1> <pcap_trace2>.. 
+		node-type: client | client-tor | client-vpn | server
 	*/
 	g_assert(slogf);
 	gboolean is_instanciation_done = FALSE; 
@@ -616,6 +617,7 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 
 	const GString* nodeType = g_string_new(argv[arg_idx++]); // client or server ?
 	const GString* client_str = g_string_new("client");
+	const GString* clientVpn_str = g_string_new("client-vpn");
 	const GString* clientTor_str = g_string_new("client-tor");
 	const GString* server_str = g_string_new("server");
 
@@ -693,6 +695,7 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	 * Then create a new client instance of the  pcap replayer plugin */
 	if(g_string_equal(nodeType,client_str)) {
 		pcapReplay->isClient = TRUE;
+		pcapReplay->isVpn = FALSE;
 		pcapReplay->isTorClient = FALSE;
 		// Start the client (socket,connect)
 		if(!pcap_StartClient(pcapReplay)) {
@@ -700,17 +703,30 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 			return NULL;
 		} 
 	} 
+	/* If the first argument is equal to "client-vpn" 
+	 * Then create a new client instance of the  pcap replayer plugin, and set the isVpn to true */
+	else if(g_string_equal(nodeType,clientVpn_str)) {
+		pcapReplay->isClient = TRUE;
+		pcapReplay->isVpn = TRUE;
+		pcapReplay->isTorClient = FALSE;
+		// Start the client (socket,connect)
+		if(!pcap_StartClient(pcapReplay)) {
+			pcap_replay_free(pcapReplay);
+			return NULL;
+		} 
+	}
 	/* If the first argument is equal to "client-tor" 
 	 * Then create a new tor client instance of the pcap replayer plugin */
 	else if(g_string_equal(nodeType,clientTor_str)) {
 		pcapReplay->isClient = TRUE;
+		pcapReplay->isVpn = FALSE;
 		pcapReplay->isTorClient = TRUE;
 		// Start the client (socket,connect)
 		if(!pcap_StartClientTor(pcapReplay)) {
 			pcap_replay_free(pcapReplay);
 			return NULL;
 		}
-	} 
+	}
 	/* If the first argument is equal to "server" 
 	 * Then create a new server instance of the pcap replayer plugin */
 	else if(g_string_equal(nodeType,server_str)) {
@@ -722,7 +738,7 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 		} 	
 	} else{
 		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-					"First argument is not equals to either 'client'|'client-tor|'server'. Exiting !");
+					"First argument is not equals to either 'client'| 'client-vpn' | 'client-tor|'server'. Exiting !");
 		pcap_replay_free(pcapReplay);
 		return NULL;
 	}
@@ -750,6 +766,8 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	// Free the Strings used for comparaison
 	g_string_free((GString*)nodeType, TRUE);
 	g_string_free((GString*)client_str, TRUE);
+	g_string_free((GString*)clientVpn_str, TRUE);
+	g_string_free((GString*)clientTor_str, TRUE);
 	g_string_free((GString*)server_str, TRUE);
 
 	if(!is_instanciation_done) {
@@ -896,21 +914,29 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay) {
 		ip = (struct sniff_ip*)(pkt_data + SIZE_ETHERNET);
 		size_ip_header = IP_HL(ip)*4;
 		// ensure that we are dealing with tcp
-		// or if we're interested in tunneling udp over tcp
+		// or if we're interested in tunneling udp over tcp in the case of vpn
 		if (ip->ip_p == '\x06') {
 			// tcp
-			tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip_header);
-			size_tcp_header = TH_OFF(tcp)*4;
-			payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + size_tcp_header);
-			size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
+			// if vpn, then encapsulate the entire TCP packet
+			if (pcapReplay->isVpn) {
+				payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header);
+				size_payload = ntohs(ip->ip_len) - size_ip_header;
+			}
+			else {
+				// only extract payload
+				tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip_header);
+				size_tcp_header = TH_OFF(tcp)*4;
+				payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + size_tcp_header);
+				size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
+			}
 		}
-		else if (ip->ip_p == '\x11') {
-			// udp
-			payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + UDP_HEADER_SIZE);
-			size_payload = ntohs(ip->ip_len) - (size_ip_header + UDP_HEADER_SIZE);
+		else if (ip->ip_p == '\x11' && pcapReplay->isVpn) {
+			// udp over tcp
+			payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header);
+			size_payload = ntohs(ip->ip_len) - size_ip_header;
 		}
 		else {
-			// neither udp nor tcp
+			// not of interest
 			continue;
 		}
 
