@@ -275,7 +275,8 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		ev.data.fd = newClientSD;
 		epoll_ctl(pcapReplay->ed, EPOLL_CTL_ADD, newClientSD, &ev);
 
-	} else {
+	} 
+	else {
 		/* A client is communicating with us over an existing connection */
 		if((events & EPOLLIN) && (events & EPOLLOUT)) {
 			/* EPOLLIN && EPOLLOUT activated :
@@ -321,7 +322,8 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 						"Unable to receive message");
 			}
 		/* End EPOLLIN & EPOLLOUT */
-		} else if(events & EPOLLIN) {
+		} 
+		else if(events & EPOLLIN) {
 			/* A message is ready to be received */
 			memset(receivedPacket, 0, (size_t)MTU);
 			numBytes = recv(sd, receivedPacket, (size_t)MTU, 0);
@@ -351,7 +353,8 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 			ev.data.fd = sd;
 			epoll_ctl(pcapReplay->ed, EPOLL_CTL_MOD, sd, &ev);
 		/* End EPOLLIN */
-		} else if(events & EPOLLOUT) {
+		} 
+		else if(events & EPOLLOUT) {
 			/* The server can send packet to the client */
 			/* send the pcap packet */
 			numBytes = send_packet(pckt_to_send, sd);
@@ -876,21 +879,40 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay) {
 	const struct sniff_ethernet *ethernet; /* The ethernet header */
 	const struct sniff_ip *ip; /* The IP header */
 	const struct sniff_tcp *tcp; /* The TCP header */
-	u_int size_ip;
-	u_int size_tcp;
-
-
+	u_int size_ip_header;
+	u_int size_tcp_header;
+	u_int size_payload;
+	char *payload;
 
 	while((size = pcap_next_ex(pcapReplay->pcap, &header, &pkt_data)) >= 0) {
 		// There exists a next packet in the pcap file
 		// Retrieve header information
 		ethernet = (struct sniff_ethernet*)(pkt_data);
+		// ensure we are dealing with an ipv4 packet
+		if (ethernet->ether_type != 8) {
+			continue;
+		}
+
 		ip = (struct sniff_ip*)(pkt_data + SIZE_ETHERNET);
-		size_ip = IP_HL(ip)*4;
-		tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip);
-		size_tcp = TH_OFF(tcp)*4;
-		char* payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip + size_tcp);
-		int size_payload = ntohs(ip->ip_len) - (size_ip + size_tcp);
+		size_ip_header = IP_HL(ip)*4;
+		// ensure that we are dealing with tcp
+		// or if we're interested in tunneling udp over tcp
+		if (ip->ip_p == '\x06') {
+			// tcp
+			tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip_header);
+			size_tcp_header = TH_OFF(tcp)*4;
+			payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + size_tcp_header);
+			size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
+		}
+		else if (ip->ip_p == '\x11') {
+			// udp
+			payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + UDP_HEADER_SIZE);
+			size_payload = ntohs(ip->ip_len) - (size_ip_header + UDP_HEADER_SIZE);
+		}
+		else {
+			// neither udp nor tcp
+			continue;
+		}
 
 		// Client scenario
 		if(pcapReplay->isClient) {
@@ -1238,8 +1260,7 @@ gboolean initiate_conn_to_proxy(Pcap_Replay* pcapReplay) {
 ssize_t send_packet(Custom_Packet_t* cp, gint sd) {
 	// Send the payload of the custom packet through the socket sd
 	char message[cp->payload_size];
-	memset(message, 0, (size_t)cp->payload_size);
-	snprintf(message,(size_t)cp->payload_size, "%s",(const char*) cp->payload);
+	memcpy(message, (const char*) cp->payload, (size_t)cp->payload_size);
 	return send(sd, message, (size_t)cp->payload_size, 0);
 }
 

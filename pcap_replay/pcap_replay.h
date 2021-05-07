@@ -181,4 +181,12 @@ struct sniff_tcp {
 	u_short th_urp;	 /* urgent pointer */
 };
 
+#define UDP_HEADER_SIZE 8
+struct sniff_udp {
+	u_short udph_sport;   /* source port */
+	u_short udph_dport;   /* destination port */
+	u_short udph_len;	 /* payload length */
+	u_short udph_sum;	 /* checksum */
+};
+
 #endif /* PCAP_REPLAY_H_*/
