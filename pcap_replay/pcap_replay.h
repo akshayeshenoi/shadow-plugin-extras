@@ -54,7 +54,6 @@ typedef struct _Pcap_Replay {
 	gboolean isFirstPacketReceived;
 	gboolean isRestarting; /* Is the server/client is in restarting state ? */
 	gboolean isDone; /* our client/server has finished or timeout occured, we can exit */
-	gint nmb_conn; /* Number of connections already made */
 
 	/* The following queues are used to keep tack of the pcap files
 	 * the plugin has to send */
@@ -75,9 +74,9 @@ typedef struct _Pcap_Replay {
 
 	/* Infos used by the client to connect to the remote server */
 	GString* serverHostName;
-	gint  serverPortInt;
 	in_addr_t serverIP; /* stored in network order */
-	in_port_t serverPort; /* stored in network order */
+	in_port_t serverPortTCP; /* stored in network order */
+	in_port_t serverPortUDP; /* stored in network order */
 
 	/* IP & ports used by the client/server in the pcap file */
 	/* These are used to pick the right packets in the pcap file */
@@ -91,7 +90,8 @@ typedef struct _Pcap_Replay {
 
 	/* Infos used by the pcap server */
 	struct {
-		int sd; /* Socket descriptor to listen to connecting client */
+		int sd_tcp; /* Socket descriptor to listen to connecting client */
+		int sd_udp; /* Socket descriptor to listen to connecting client */
 	} server;
 } Pcap_Replay;
 
@@ -114,8 +114,9 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events);
 void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events);
 
 gint pcap_replay_getEpollDescriptor(Pcap_Replay* pcapReplay);
-void _pcap_server_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events);
-void _pcap_client_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events);
+void _pcap_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events, int sd);
+// void _pcap_server_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events);
+// void _pcap_client_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events);
 
 gboolean get_next_packet(Pcap_Replay* pcapReplay);
 ssize_t send_packet(Custom_Packet_t* cp, gint sd);

@@ -249,7 +249,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 	}
 
 	/* Process events */
-	if(sd == pcapReplay->server.sd) {
+	if(sd == pcapReplay->server.sd_tcp) {
 		/* data on a listening socket means a new client connection */
 		assert(events & EPOLLIN);
 
@@ -276,6 +276,18 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		epoll_ctl(pcapReplay->ed, EPOLL_CTL_ADD, newClientSD, &ev);
 
 	} 
+	// else if (sd == pcapReplay->server.sd_udp) {
+	// 	/* activity on udp socket */
+	// 	/*  Prepare to receive message */
+	// 		memset(receivedPacket, 0, (size_t)MTU);
+	// 		numBytes = recv(sd, receivedPacket, (size_t)MTU, 0);
+	// 		pcapReplay->isFirstPacketReceived=TRUE;
+	// 		/* log result */
+	// 		if(numBytes > 0) {
+	// 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+	// 						"Successfully received a packet from the client", numBytes);
+	// 		}
+	// }
 	else {
 		/* A client is communicating with us over an existing connection */
 		if((events & EPOLLIN) && (events & EPOLLOUT)) {
@@ -389,6 +401,10 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 	}
 }
 
+void server_send_loop(Pcap_Replay* pcapReplay) {
+	
+}
+
 gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 	g_assert(pcapReplay && (pcapReplay->magic == MAGIC));
 
@@ -413,12 +429,12 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 
 	/* Set TCP_NODELAY option to avoid Nagle algo */
 	int optval = 1;
-	setsockopt(pcapReplay->server.sd, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval));
-	if(pcapReplay->client.sd == -1){
+	if(setsockopt(pcapReplay->client.sd, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval)) != 0){
 		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
 					"Unable to set options to the socket !");
 		return FALSE;
 	}
+
 	/* get the server ip address */
 	if(g_ascii_strncasecmp(pcapReplay->serverHostName->str, "localhost", 9) == 0) {
 		pcapReplay->serverIP = htonl(INADDR_LOOPBACK);
@@ -440,11 +456,7 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 	memset(&serverAddress, 0, sizeof(serverAddress));
 	serverAddress.sin_family = AF_INET;
 	serverAddress.sin_addr.s_addr = pcapReplay->serverIP;
-	
-	int new_port = pcapReplay->serverPortInt + pcapReplay->nmb_conn;
-	pcapReplay->serverPort = (in_port_t) htons(new_port) ;
-	serverAddress.sin_port =pcapReplay->serverPort;
-	pcapReplay->nmb_conn = pcapReplay->nmb_conn+1;
+	serverAddress.sin_port =pcapReplay->serverPortTCP;
 
 	/* connect to server. since we are non-blocking, we expect this to return EINPROGRESS */
 	gint res = connect(pcapReplay->client.sd, (struct sockaddr *) &serverAddress, sizeof(serverAddress));
@@ -456,7 +468,7 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 
 	/* specify the events to watch for on this socket.
 	 * to start out, the client wants to know when it can send a message. */
-	_pcap_client_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLOUT);
+	_pcap_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLOUT, pcapReplay->client.sd);
 
 	return TRUE;
 }
@@ -484,8 +496,7 @@ gboolean pcap_StartClientTor(Pcap_Replay* pcapReplay) {
 
 	/* Set TCP_NODELAY option to avoid Nagle algo */
 	int optval = 1;
-	setsockopt(pcapReplay->client.sd, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval));
-	if(pcapReplay->server.sd == -1){
+	if(setsockopt(pcapReplay->client.sd, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval)) != 0){
 		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
 					"Unable to set options to the socket !");
 		return FALSE;
@@ -517,7 +528,7 @@ gboolean pcap_StartClientTor(Pcap_Replay* pcapReplay) {
 
 	/* specify the events to watch for on this socket.
 	 * to start out, the client wants to know when it can send a message. */
-	_pcap_client_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLOUT);
+	_pcap_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLOUT, pcapReplay->client.sd);
 
 	return TRUE;
 }
@@ -536,9 +547,11 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 		}
 	}
 
+	/******************** TCP SERVER ********************/
+
 	/* Create the server socket and get a socket descriptor */
-	pcapReplay->server.sd = socket(AF_INET, (SOCK_STREAM | SOCK_NONBLOCK), 0);
-	if(pcapReplay->server.sd == -1) {
+	pcapReplay->server.sd_tcp = socket(AF_INET, (SOCK_STREAM | SOCK_NONBLOCK), 0);
+	if(pcapReplay->server.sd_tcp == -1) {
 		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
 					"Unable to start control socket: error in socket");
 		return FALSE;
@@ -546,35 +559,22 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 
 	/* Set TCP_NODELAY option to avoid Nagle algo */
 	int optval = 1;
-	setsockopt(pcapReplay->server.sd, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval));
-	if(pcapReplay->server.sd == -1){
+	if(setsockopt(pcapReplay->server.sd_tcp, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval)) != 0){
 		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
 					"Unable to set options to the socket !");
 		return FALSE;
 	}
 
-	// if(setsockopt(pcapReplay->server.sd, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval)) == -1){
-		// pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
-		// 			"Unable to set options to the socket !");
-		// return FALSE;
-	// }
 
 	/* Setup the socket address info, client has outgoing connection to server */
 	struct sockaddr_in bindAddress;
 	memset(&bindAddress, 0, sizeof(bindAddress));
 	bindAddress.sin_family = AF_INET;
 	bindAddress.sin_addr.s_addr = INADDR_ANY;
-	int new_port = pcapReplay->serverPortInt + pcapReplay->nmb_conn;
-
-	/* Since the server cannot rebind instantly after restarting,
-	 * we increment the port number by one. The client does the same thing 
-	 * NOW : The client/server doesn't deconnect themselves anymore. Only one startServer now*/
-	pcapReplay->serverPort = htons(new_port) ;
-	bindAddress.sin_port =pcapReplay->serverPort;
-	pcapReplay->nmb_conn = pcapReplay->nmb_conn+1;
+	bindAddress.sin_port = pcapReplay->serverPortTCP;
 
 	/* Bind the socket to the server port */
-	gint res = bind(pcapReplay->server.sd, (struct sockaddr *) &bindAddress, sizeof(bindAddress));
+	gint res = bind(pcapReplay->server.sd_tcp, (struct sockaddr *) &bindAddress, sizeof(bindAddress));
 	if (res == -1) {
 		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
 				"unable to start server: error in bind");
@@ -582,16 +582,45 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 	}
 
 	/* set as server socket that will listen for clients */
-	res = listen(pcapReplay->server.sd, 100);
+	res = listen(pcapReplay->server.sd_tcp, 100);
 	if (res == -1) {
 		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-				"unable to start server: error in listen");
+				"unable to start server: error in listen tcp");
 		return FALSE;
 	}
 
 	/* Specify the events to watch for on this socket.
 	 * To start out, the server wants to know when a client is connecting. */
-	_pcap_server_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLIN);
+	_pcap_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLIN, pcapReplay->server.sd_tcp);
+
+	/******************** UDP SERVER ********************/
+
+	/* Create the server socket and get a socket descriptor */
+	pcapReplay->server.sd_udp = socket(AF_INET, (SOCK_DGRAM | SOCK_NONBLOCK), 0);
+	if(pcapReplay->server.sd_udp == -1) {
+		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
+					"Unable to start control socket: error in socket");
+		return FALSE;
+	}
+
+	/* Setup the socket address info, client has outgoing connection to server */
+	// listen to udp on the tcp port + 1
+	memset(&bindAddress, 0, sizeof(bindAddress));
+	bindAddress.sin_family = AF_INET;
+	bindAddress.sin_addr.s_addr = INADDR_ANY;
+	bindAddress.sin_port = pcapReplay->serverPortUDP;
+
+	/* Bind the socket to the server port */
+	res = bind(pcapReplay->server.sd_udp, (struct sockaddr *) &bindAddress, sizeof(bindAddress));
+	if (res == -1) {
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
+				"unable to start server: error in bind");
+		return FALSE;
+	}
+
+	/* Specify the events to watch for on this socket.
+	 * To start out, the server wants to know when a client is connecting. */
+	_pcap_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLIN, pcapReplay->server.sd_udp);
 
 	return TRUE;
 }
@@ -630,9 +659,8 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 
 	/* Get the remote server name & port */
 	pcapReplay->serverHostName = g_string_new(argv[arg_idx++]);
-	pcapReplay->serverPort = (in_port_t) htons((in_port_t)atoi(argv[arg_idx]));
-	pcapReplay->serverPortInt = atoi(argv[arg_idx++]);
-	pcapReplay->nmb_conn = 0;
+	pcapReplay->serverPortTCP = (in_port_t) htons(atoi(argv[arg_idx]));
+	pcapReplay->serverPortUDP = (in_port_t) htons(atoi(argv[arg_idx++]) + 1);
 
 	pcapReplay->isAllowedToSend = TRUE;
 	pcapReplay->isFirstPacketReceived=TRUE;
@@ -790,6 +818,7 @@ void pcap_replay_ready(Pcap_Replay* pcapReplay) {
 	 * Then activate client or server with corresponding events (EPOLLIN &| EPOLLOUT)*/
 	struct epoll_event epevs[100];
 	gint nfds = epoll_wait(pcapReplay->ed, epevs, 100, 0);
+	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "NFD %d", nfds);
 	if(nfds == -1) {
 		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "error in epoll_wait");
 	} else {
@@ -805,31 +834,17 @@ void pcap_replay_ready(Pcap_Replay* pcapReplay) {
 	}
 }
 
-void _pcap_client_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events) {
+void _pcap_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events, int sd) {
 	g_assert(pcapReplay && (pcapReplay->magic == MAGIC));
 
 	struct epoll_event ev;
 	memset(&ev, 0, sizeof(struct epoll_event));
 	ev.events = events;
-	ev.data.fd = pcapReplay->client.sd;
+	ev.data.fd = sd;
 
-	gint res = epoll_ctl(pcapReplay->ed, operation, pcapReplay->client.sd, &ev);
+	gint res = epoll_ctl(pcapReplay->ed, operation, sd, &ev);
 	if(res == -1) {
-		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__, "error in client_epoll_ctl");
-	}
-}
-
-void _pcap_server_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events) {
-	g_assert(pcapReplay && (pcapReplay->magic == MAGIC));
-
-	struct epoll_event ev;
-	memset(&ev, 0, sizeof(struct epoll_event));
-	ev.events = events;
-	ev.data.fd = pcapReplay->server.sd;
-
-	gint res = epoll_ctl(pcapReplay->ed, operation, pcapReplay->server.sd, &ev);
-	if(res == -1) {
-		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__, "error in server_epoll_ctl");
+		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__, "Error in epoll_ctl");
 	}
 }
 
@@ -852,8 +867,11 @@ void pcap_replay_free(Pcap_Replay* pcapReplay) {
 	if(pcapReplay->client.sd) {
 		close(pcapReplay->client.sd);
 	}
-	if(pcapReplay->server.sd) {
-		close(pcapReplay->server.sd);
+	if(pcapReplay->server.sd_tcp) {
+		close(pcapReplay->server.sd_tcp);
+	}
+	if(pcapReplay->server.sd_udp) {
+		close(pcapReplay->server.sd_udp);
 	}
 	if(pcapReplay->serverHostName) {
 		g_string_free(pcapReplay->serverHostName, TRUE);
@@ -1049,55 +1067,11 @@ gboolean change_pcap_file_to_send(Pcap_Replay* pcapReplay) {
 }
 
 gboolean restart_server(Pcap_Replay* pcapReplay) {
-	/* The remote connection has been closed OR
-	 * The server have finished sending the current pcap file.
-	 * In these two cases, the server needs to restart and bind a new port. */
-
-	/* Time to wait before the server restart sending the next pcap file */
-	struct timespec ts; 
-	ts.tv_sec=50;
-	ts.tv_nsec=0;
-
-
-	/* UNCOMMENT IF YOU WANT THE CONNECTION TO BE CLOSED 
-	 * AND RESTARTED AFTER EACH PCAP FILE */
-
-	// Finish the connection if not already done 
-	shutdown(pcapReplay->server.sd,2);
-	close(pcapReplay->server.sd);
+	shutdown(pcapReplay->server.sd_tcp,2);
+	shutdown(pcapReplay->server.sd_udp,2);
+	close(pcapReplay->server.sd_tcp);
+	close(pcapReplay->server.sd_udp);
 	return FALSE;
-
-	// // renew pcap descriptor in use
-	// if(!change_pcap_file_to_send(pcapReplay)) {
-	// 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot change pcap file to send ! Exiting");
-	// 	return FALSE;
-	// };
-	// // Load the first packet into the current state
-	// if(!get_next_packet(pcapReplay)) {
-	// 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot find a matching packet in the pcap file ! Exiting");
-	// 	return FALSE;
-	// }
-	// // Sleep for ts seconds to make sure connection/port have been released
-	// nanosleep((const struct timespec*)&ts,NULL); 
-	// pcapReplay->isAllowedToSend = FALSE; // Need to wait for the first packet of the client !
-	// pcapReplay->isFirstPacketReceived=FALSE;
-
-	/* UNCOMMENT IF YOU WANT THE CONNECTION TO BE CLOSED 
-	 * AND RESTARTED AFTER SENDING EACH PCAP FILE */
-
-	/*
-	pcapReplay->isRestarting = TRUE;
-	if(!pcap_StartServer(pcapReplay)) {
-		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-				"Unable to restart the server ! Exiting ");
-		return FALSE;
-	} else{
-		return TRUE;
-	}
-	*/
-
-	// return TRUE;
-
 }
 
 gboolean restart_client(Pcap_Replay* pcapReplay) {
@@ -1234,9 +1208,7 @@ gboolean initiate_conn_to_proxy(Pcap_Replay* pcapReplay) {
 
 	/* case 3a - IPv4 */
 	in_addr_t ip = pcapReplay->serverIP;
-	int new_port = pcapReplay->serverPortInt + pcapReplay->nmb_conn;
-	in_addr_t port = htons(new_port);
-	pcapReplay->nmb_conn = pcapReplay->nmb_conn+1;
+	in_addr_t port = pcapReplay->serverPortTCP;
 
 	gchar step3_buffer[16];
 	memset(step3_buffer, 0, 16);
