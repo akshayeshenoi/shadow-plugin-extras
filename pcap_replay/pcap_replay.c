@@ -917,6 +917,13 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay) {
 		// or if we're interested in tunneling udp over tcp in the case of vpn
 		if (ip->ip_p == '\x06') {
 			// tcp
+			// check if it is a control message and skip
+			tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip_header);
+			if (!(tcp->th_flags & TH_PUSH)) {
+				// does not have any payload
+				continue;
+			}
+
 			// if vpn, then encapsulate the entire TCP packet
 			if (pcapReplay->isVpn) {
 				payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header);
@@ -924,7 +931,6 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay) {
 			}
 			else {
 				// only extract payload
-				tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip_header);
 				size_tcp_header = TH_OFF(tcp)*4;
 				payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + size_tcp_header);
 				size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
