@@ -69,7 +69,7 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		itimerspecWait.it_value = timeToWait;
 		if (timerfd_settime(pcapReplay->client.tfd_sendtimer, 0, &itimerspecWait, NULL) < 0) {
 			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Can't set timerFD");
-			shutdown_client(pcapReplay);
+			exit(1);
 		}
 
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sleeping for %d %d!", timeToWait.tv_sec, timeToWait.tv_nsec);
@@ -102,6 +102,61 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 	}
 }
 
+
+gboolean _pcap_init_server_sending(Pcap_Replay* pcapReplay) {
+	// get the time delay between the first packet sent by client and the server
+	// the server must transmit only after this time.
+	// so first, get the timestamp of the first client packet
+	// note that we set the isClient flag as true here because we are interested
+	// in the first packet sent by the client, despite being the server!
+	if(!get_next_packet(pcapReplay, TRUE)) {
+		/* No packet found! Should not really happen but handling anyway. */
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, 
+			"No packet found! Client sends nothing?");
+		// quit with error
+		exit(1);
+	}
+
+	struct timeval first_clientpkt_time = pcapReplay->nextPacket->timestamp;
+
+	//  now get the first server packet
+	if(!get_next_packet(pcapReplay, FALSE)) {
+		/* No packet found! */
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
+			"No packet found! Server sends nothing?");
+		// quit with error
+		exit(1);
+	}
+
+	struct timeval first_serverpkt_time = pcapReplay->nextPacket->timestamp;
+	struct timespec timeToWait;
+
+	timeval_subtract (&timeToWait, &first_clientpkt_time,&first_serverpkt_time);
+
+	// create timerfd and sleep for timetowait
+	pcapReplay->server.tfd_sendtimer = timerfd_create(CLOCK_MONOTONIC, 0);
+
+	struct itimerspec itimerspecWait;
+	itimerspecWait.it_interval.tv_nsec = 0;
+	itimerspecWait.it_interval.tv_sec = 0;
+	itimerspecWait.it_value = timeToWait;
+	if (timerfd_settime(pcapReplay->server.tfd_sendtimer, 0, &itimerspecWait, NULL) < 0) {
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Can't set timerFD");
+		exit(1);
+	}
+	pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sleeping for %d %d!", timeToWait.tv_sec, timeToWait.tv_nsec);
+
+	// finally monitor by epoll
+	struct epoll_event ev;
+	ev.events = EPOLLIN;
+	ev.data.fd = pcapReplay->server.tfd_sendtimer;
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_ADD, pcapReplay->server.tfd_sendtimer, &ev);
+	pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Epoll timer created!");
+
+	pcapReplay->isServerSending = TRUE;
+}
+
+
 /* pcap_activateServer() is called when the epoll descriptor has an event for the server */
 void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 	pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Activate server !");
@@ -122,8 +177,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 	}
 
 	/* Process events */
-	if(sd == pcapReplay->server.sd_tcp) {
-		/* data on a listening socket means a new client connection */
+	if(sd == pcapReplay->server.sd_tcp) { /* data on a listening socket means a new client tcp connection */
 		assert(events & EPOLLIN);
 
 		/* accept new connection from a remote client */
@@ -151,55 +205,38 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		// save reference to client
 		pcapReplay->server.client_sd_tcp = newClientSD;
 
-		// get the time delay between the first packet sent by client and the server
-		// the server must transmit only after this time.
-		// so first, get the timestamp of the first client packet
-		// note that we set the isClient flag as true here because we are interested
-		// in the first packet sent by the client, despite being the server!
-		if(!get_next_packet(pcapReplay, TRUE)) {
-			/* No packet found! Should not really happen but handling anyway. */
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, 
-				"No packet found! Client sends nothing?");
-			// quit with error
-			exit(1);
-		}
-
-		struct timeval first_clientpkt_time = pcapReplay->nextPacket->timestamp;
-
-		//  now get the first server packet
-		if(!get_next_packet(pcapReplay, FALSE)) {
-			/* No packet found! */
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-				"No packet found! Server sends nothing?");
-			// quit with error
-			exit(1);
-		}
-
-		struct timeval first_serverpkt_time = pcapReplay->nextPacket->timestamp;
-		struct timespec timeToWait;
-
-		timeval_subtract (&timeToWait, &first_clientpkt_time,&first_serverpkt_time);
-
-		// create timerfd and sleep for timetowait
-		pcapReplay->server.tfd_sendtimer = timerfd_create(CLOCK_MONOTONIC, 0);
-
-		struct itimerspec itimerspecWait;
-		itimerspecWait.it_interval.tv_nsec = 0;
-		itimerspecWait.it_interval.tv_sec = 0;
-		itimerspecWait.it_value = timeToWait;
-		if (timerfd_settime(pcapReplay->server.tfd_sendtimer, 0, &itimerspecWait, NULL) < 0) {
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Can't set timerFD");
-		}
-		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sleeping for %d %d!", timeToWait.tv_sec, timeToWait.tv_nsec);
-
-		// finally monitor by epoll
-		memset(&ev, 0, sizeof(struct epoll_event));
-		ev.events = EPOLLIN;
-		ev.data.fd = pcapReplay->server.tfd_sendtimer;
-		epoll_ctl(pcapReplay->ed, EPOLL_CTL_ADD, pcapReplay->server.tfd_sendtimer, &ev);
-		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Epoll timer created!");
+		_pcap_init_server_sending(pcapReplay);
 	}
-	else if (sd == pcapReplay->server.tfd_sendtimer) { // time to send the next packet
+
+	else if (sd == pcapReplay->server.sd_udp) { /* data on a listening socket means a new client udp connection */
+		/*  Prepare to receive message */
+		memset(receivedPacket, 0, (size_t)MTU);
+		int clientlen = sizeof(pcapReplay->server.clientaddr);
+		numBytes = recvfrom(pcapReplay->server.sd_udp, receivedPacket, (size_t)MTU, 0, 
+							(struct sockaddr *)&pcapReplay->server.clientaddr, &clientlen);
+
+		/* log result */
+		if(numBytes > 0) {
+			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+						"Successfully received a packet from the client: %d bytes", numBytes);
+		} else if(numBytes == 0) {
+			/* What is this TODO */
+			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+						"The last packet to send was an ACK. Skipped sending.", numBytes);
+		} else {
+			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+						"Unable to send message");
+			exit(1);
+		}
+
+		// initialize sending
+		// we add this check in the udp case because UDP is clueless about states
+		if (!pcapReplay->isServerSending) {
+			_pcap_init_server_sending(pcapReplay);
+		}
+	}
+
+	else if (sd == pcapReplay->server.tfd_sendtimer) { /* time to send the next packet */
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sending packet!");
 		Custom_Packet_t* pckt_to_send = pcapReplay->nextPacket;
 
@@ -239,6 +276,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		itimerspecWait.it_value = timeToWait;
 		if (timerfd_settime(pcapReplay->server.tfd_sendtimer, 0, &itimerspecWait, NULL) < 0) {
 			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Can't set timerFD");
+			exit(1);
 		}
 
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sleeping for %d %d!", timeToWait.tv_sec, timeToWait.tv_nsec);
@@ -246,23 +284,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		free(pckt_to_send);
 	}
 
-	// TODO
-	// use timerfd to use epoll for sleep https://gist.github.com/ianpartridge/cb65a2bd79ba0746b9d68aa2afaed7f1
-	// process send when sd = timerfd and event is epollin
-	// also process UDP stuff
 
-	// else if (sd == pcapReplay->server.sd_udp) {
-	// 	/* activity on udp socket */
-	// 	/*  Prepare to receive message */
-	// 		memset(receivedPacket, 0, (size_t)MTU);
-	// 		numBytes = recv(sd, receivedPacket, (size_t)MTU, 0);
-	// 		pcapReplay->isFirstPacketReceived=TRUE;
-	// 		/* log result */
-	// 		if(numBytes > 0) {
-	// 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-	// 						"Successfully received a packet from the client", numBytes);
-	// 		}
-	// }
 	else if(events & EPOLLIN) { // receive a message from the client	
 		memset(receivedPacket, 0, (size_t)MTU);
 		numBytes = recv(sd, receivedPacket, (size_t)MTU, 0);
@@ -292,13 +314,11 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 	g_assert(pcapReplay && (pcapReplay->magic == MAGIC));
 
 	/* use epoll to asynchronously watch events for all of our sockets */
-	if(pcapReplay->isRestarting==FALSE) {
-		pcapReplay->ed = epoll_create(1);
-		if(pcapReplay->ed == -1) {
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Error in main epoll_create");
-			close(pcapReplay->ed);
-			return FALSE;
-		}
+	pcapReplay->ed = epoll_create(1);
+	if(pcapReplay->ed == -1) {
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Error in main epoll_create");
+		close(pcapReplay->ed);
+		return FALSE;
 	}
 
 	/* create the client socket and get a socket descriptor */
@@ -366,13 +386,11 @@ gboolean pcap_StartClientTor(Pcap_Replay* pcapReplay) {
 	g_assert(pcapReplay && (pcapReplay->magic == MAGIC));
 
 	/* use epoll to asynchronously watch events for all of our sockets */
-	if(pcapReplay->isRestarting==FALSE) {
-		pcapReplay->ed = epoll_create(1);
-		if(pcapReplay->ed == -1) {
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Error in main epoll_create");
-			close(pcapReplay->ed);
-			return FALSE;
-		}
+	pcapReplay->ed = epoll_create(1);
+	if(pcapReplay->ed == -1) {
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Error in main epoll_create");
+		close(pcapReplay->ed);
+		return FALSE;
 	}
 	
 	/* create the client socket and get a socket descriptor */
@@ -433,14 +451,11 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 	g_assert(pcapReplay && (pcapReplay->magic == MAGIC));
 
 	/* use epoll to asynchronously watch events for all of our sockets */
-	if(pcapReplay->isRestarting==FALSE) {
-		/* Don't close&restart epoll descriptor when isRestarting!*/
-		pcapReplay->ed = epoll_create(1);
-		if(pcapReplay->ed == -1) {
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Error in main epoll_create");
-			close(pcapReplay->ed);
-			return FALSE;
-		}
+	pcapReplay->ed = epoll_create(1);
+	if(pcapReplay->ed == -1) {
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Error in main epoll_create");
+		close(pcapReplay->ed);
+		return FALSE;
 	}
 
 	/******************** TCP SERVER ********************/
@@ -557,10 +572,6 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	pcapReplay->serverHostName = g_string_new(argv[arg_idx++]);
 	pcapReplay->serverPortTCP = (in_port_t) htons(atoi(argv[arg_idx]));
 	pcapReplay->serverPortUDP = (in_port_t) htons(atoi(argv[arg_idx++]) + 1);
-
-	pcapReplay->isAllowedToSend = TRUE;
-	pcapReplay->isFirstPacketReceived=TRUE;
-	pcapReplay->isRestarting = FALSE;
 
 	// Get client IP addr used in the pcap file
 	if(inet_aton(argv[arg_idx++], &pcapReplay->client_IP_in_pcap) == 0) {
@@ -980,7 +991,6 @@ gboolean shutdown_server(Pcap_Replay* pcapReplay) {
 	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.sd_tcp, NULL);
 	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.sd_udp, NULL);
 	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.client_sd_tcp, NULL);
-	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.client_sd_udp, NULL);
 	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.tfd_sendtimer, NULL);
 
 	shutdown(pcapReplay->server.sd_tcp,2);
@@ -989,7 +999,6 @@ gboolean shutdown_server(Pcap_Replay* pcapReplay) {
 	close(pcapReplay->server.sd_tcp);
 	close(pcapReplay->server.sd_udp);
 	close(pcapReplay->server.client_sd_tcp);
-	close(pcapReplay->server.client_sd_udp);
 	close(pcapReplay->server.tfd_sendtimer);
 
 	pcapReplay->isDone = TRUE;

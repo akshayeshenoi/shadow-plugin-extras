@@ -53,10 +53,8 @@ typedef struct _Pcap_Replay {
 	gboolean isClient; /* client or server */
 	gboolean isVpn; /* flag that allows encapsulation */
 	gboolean isTorClient; /* normal client or tor-client */
-	gboolean isAllowedToSend;
-	gboolean isFirstPacketReceived;
-	gboolean isRestarting; /* Is the server/client is in restarting state ? */
 	gboolean isDone; /* our client/server has finished or timeout occured, we can exit */
+	gboolean isServerSending; /* set to true when client connects and server initializes its sending process */
 
 	/* The following queues are used to keep tack of the pcap files
 	 * the plugin has to send */
@@ -95,11 +93,12 @@ typedef struct _Pcap_Replay {
 
 	/* Infos used by the pcap server */
 	struct {
-		int sd_tcp; /* TCP Socket descriptor to listen to connecting client */
-		int sd_udp; /* UDP Socket descriptor to recv from clients */
 		int tfd_sendtimer; /* timerfd to notify server to send */
+		int sd_tcp; /* TCP Socket descriptor to listen to connecting client */
 		int client_sd_tcp; /* TCP socket of the client */
-		int client_sd_udp; /* TCP socket of the client */
+
+		int sd_udp; /* UDP Socket descriptor to recv from clients */
+		struct sockaddr_in clientaddr; /* Client's UDP endpoint info */
 	} server;
 } Pcap_Replay;
 
