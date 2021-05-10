@@ -109,8 +109,8 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay);
 gboolean pcap_StartServer(Pcap_Replay* pcapReplay);
 gboolean pcap_StartClientTor(Pcap_Replay* pcapReplay);
 
-gboolean restart_server(Pcap_Replay* pcapReplay);
-gboolean restart_client(Pcap_Replay* pcapReplay);
+gboolean shutdown_server(Pcap_Replay* pcapReplay);
+gboolean shutdown_client(Pcap_Replay* pcapReplay);
 
 /* Tor client specific */
 gboolean initiate_conn_to_proxy(Pcap_Replay* pcapReplay);

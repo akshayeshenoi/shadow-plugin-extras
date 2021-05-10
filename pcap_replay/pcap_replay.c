@@ -46,16 +46,17 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
 						"The last packet to send was an ACK. Skipped sending.", numBytes);
 		} else {
-			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-						"Unable to send message");
-			exit(1);
+			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Unable to send message!");
 		}
 
 		//  now prepare next packet
 		if(!get_next_packet(pcapReplay, TRUE)) {
 			/* No packet found! */
 			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "No packet found! Just going to wait..");
-			// TODO fix this?
+
+			// hack to simulate long delay
+			pcapReplay->nextPacket->timestamp.tv_sec = 999999;
+			pcapReplay->nextPacket->timestamp.tv_usec = 0;
 		}
 
 		struct timespec timeToWait;
@@ -68,7 +69,7 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		itimerspecWait.it_value = timeToWait;
 		if (timerfd_settime(pcapReplay->client.tfd_sendtimer, 0, &itimerspecWait, NULL) < 0) {
 			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Can't set timerFD");
-			exit(1);
+			shutdown_client(pcapReplay);
 		}
 
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sleeping for %d %d!", timeToWait.tv_sec, timeToWait.tv_nsec);
@@ -84,30 +85,20 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
 						"Successfully received a packet from server: %d bytes", numBytes);
 		} else if(numBytes==0) {
-			/* The connection have been closed by the distant peer.
-			 * The client need to close the connection and restart (or quit because of timeout */
-			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-						"Server closed connection? Restarting..");
-			if(restart_client(pcapReplay)) {
-				pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, 
-							"Successfully restarted the client !");
-				return;
-			} else{
-				deinstanciate(pcapReplay,sd);
-				return;
-			}
+			/* The connection have been closed by the distant peer. Terminate */
+			pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
+						"Server closed connection? Shutting down..");
+			shutdown_client(pcapReplay);
 		} else{
-			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-						"Unable to receive message");
+			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Unable to receive message");
 		}
 	}
 
 	/*  If the timeout is reached, close the plugin ! */
 	GDateTime* dt = g_date_time_new_now_local();
 	if(g_date_time_to_unix(dt) >= pcapReplay->timeout) {
-		/* tell epoll we no longer want to watch this socket */
-		pcapReplay->slogf(G_LOG_LEVEL_INFO, __FUNCTION__,  "Timeout reached!");
-		deinstanciate(pcapReplay,sd);
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,  "Timeout reached!");
+		shutdown_client(pcapReplay);
 	}
 }
 
@@ -166,9 +157,11 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		// note that we set the isClient flag as true here because we are interested
 		// in the first packet sent by the client, despite being the server!
 		if(!get_next_packet(pcapReplay, TRUE)) {
-			/* No packet found! */
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "No packet found! Error");
-			// TODO quit here
+			/* No packet found! Should not really happen but handling anyway. */
+			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, 
+				"No packet found! Client sends nothing?");
+			// quit with error
+			exit(1);
 		}
 
 		struct timeval first_clientpkt_time = pcapReplay->nextPacket->timestamp;
@@ -176,8 +169,10 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		//  now get the first server packet
 		if(!get_next_packet(pcapReplay, FALSE)) {
 			/* No packet found! */
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "No packet found! Error");
-			// TODO quit here
+			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
+				"No packet found! Server sends nothing?");
+			// quit with error
+			exit(1);
 		}
 
 		struct timeval first_serverpkt_time = pcapReplay->nextPacket->timestamp;
@@ -215,9 +210,9 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
 					"Successfully sent a '%d' (bytes) packet to the client", numBytes);
 		} else if(numBytes == 0) {
-		/* What is this TODO */
-		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-					"The last packet to send was an ACK. Skipped sending.", numBytes);
+			/* What is this TODO */
+			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+						"The last packet to send was an ACK. Skipped sending.", numBytes);
 		} else {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
 						"Unable to send message");
@@ -228,7 +223,10 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		if(!get_next_packet(pcapReplay, FALSE)) {
 			/* No packet found! */
 			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "No packet found! Just going to wait..");
-			// TODO fix this
+
+			// hack to simulate long delay
+			pcapReplay->nextPacket->timestamp.tv_sec = 999999;
+			pcapReplay->nextPacket->timestamp.tv_usec = 0;
 		}
 
 		struct timespec timeToWait;
@@ -274,27 +272,19 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
 					"Successfully received a message for the client: %d bytes", numBytes);
 		} else if(numBytes == 0) {
-			/* Client closed the remote connection
-				* Restart the server & wait for a new connection */
-			if(restart_server(pcapReplay)) {
-				pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Successfully restarted the server !");
-				return;
-			} else{
-				deinstanciate(pcapReplay,sd);
-				return;
-			}
+			/* Client closed the remote connection.. shutdown */
+			shutdown_server(pcapReplay);
 		} else {
-			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-					"Unable to receive message");
+			pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
+					"Unable to receive message!");
 		}
 	}
 
 	/* If timeout expired, close connection and exit plugin */
 	GDateTime* dt = g_date_time_new_now_local();
 	if(g_date_time_to_unix(dt) >= pcapReplay->timeout) {
-		/* tell epoll we want to write the response now */
-		pcapReplay->slogf(G_LOG_LEVEL_INFO, __FUNCTION__,  "Timeout reached!");
-		deinstanciate(pcapReplay,sd);
+		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,  "Timeout reached!");
+		shutdown_server(pcapReplay);
 	}
 }
 
@@ -738,7 +728,7 @@ void pcap_replay_ready(Pcap_Replay* pcapReplay) {
 	 * Then activate client or server with corresponding events (EPOLLIN &| EPOLLOUT)*/
 	struct epoll_event epevs[100];
 	gint nfds = epoll_wait(pcapReplay->ed, epevs, 100, 0);
-	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "NFD %d", nfds);
+
 	if(nfds == -1) {
 		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "error in epoll_wait");
 	} else {
@@ -986,68 +976,41 @@ gboolean change_pcap_file_to_send(Pcap_Replay* pcapReplay) {
 	}
 }
 
-gboolean restart_server(Pcap_Replay* pcapReplay) {
+gboolean shutdown_server(Pcap_Replay* pcapReplay) {
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.sd_tcp, NULL);
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.sd_udp, NULL);
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.client_sd_tcp, NULL);
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.client_sd_udp, NULL);
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->server.tfd_sendtimer, NULL);
+
 	shutdown(pcapReplay->server.sd_tcp,2);
 	shutdown(pcapReplay->server.sd_udp,2);
+
 	close(pcapReplay->server.sd_tcp);
 	close(pcapReplay->server.sd_udp);
+	close(pcapReplay->server.client_sd_tcp);
+	close(pcapReplay->server.client_sd_udp);
+	close(pcapReplay->server.tfd_sendtimer);
+
+	pcapReplay->isDone = TRUE;
+	pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Plugin exiting!");
+
 	return FALSE;
 }
 
-gboolean restart_client(Pcap_Replay* pcapReplay) {
-	struct timespec timewait; // Time to wait before isRestarting
-	timewait.tv_sec=60;
-	timewait.tv_nsec=0;
+gboolean shutdown_client(Pcap_Replay* pcapReplay) {
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->client.server_sd_tcp, NULL);
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->client.server_sd_udp, NULL);
+	epoll_ctl(pcapReplay->ed, EPOLL_CTL_DEL, pcapReplay->client.tfd_sendtimer, NULL);
 
-	/* UNCOMMENT IF YOU WANT THE CONNECTION TO BE CLOSED 
-	 * AND RESTARTED AFTER SENDING EACH PCAP FILE */
-
-	// Finish the connection if not already done 
-	shutdown(pcapReplay->client.server_sd_tcp,2);
 	close(pcapReplay->client.server_sd_tcp);
+	close(pcapReplay->client.server_sd_udp);
+	close(pcapReplay->client.tfd_sendtimer);
+
+	pcapReplay->isDone = TRUE;
+	pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Plugin exiting!");
+
 	return FALSE;
-
-	// // renew pcap descriptor in use
-	// if(!change_pcap_file_to_send(pcapReplay)) {
-	// 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot change pcap file to send ! Exiting");
-	// 	return FALSE;
-	// };
-
-	// if(!get_next_packet(pcapReplay)) {
-	// 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Cannot find a matching packet in the pcap file ! Exiting");
-	// 	return FALSE;
-	// }
-
-	// // Sleep for timeToWait before isRestarting the client 
-	// nanosleep((const struct timespec*)&timewait,NULL); 
-
-	/* UNCOMMENT IF YOU WANT THE CONNECTION TO BE CLOSED 
-	 * AND RESTARTED AFTER EACH PCAP FILE */
-	/*
-
-	pcapReplay->isRestarting = TRUE;
-	if(pcapReplay->isTorClient==FALSE) {
-		// The current instance is a normal client, then restart as a normal client
-		if(!pcap_StartClient(pcapReplay)) {
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-					"Unable to restart the client (re-connect to server failed) ! Exiting ");
-			return FALSE;
-		} else{
-			return TRUE;
-		}
-	} else {
-		// The current instance is a Tor client, then restart as a Tor client
-		if(!pcap_StartClientTor(pcapReplay)) {
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-					"Unable to restart the Tor client (re-connect to server failed) ! Exiting ");
-			return FALSE;
-		} else{
-			return TRUE;
-		}
-	}
-	*/
-
-	// return TRUE;
 }
 
 gboolean initiate_conn_to_proxy(Pcap_Replay* pcapReplay) {
