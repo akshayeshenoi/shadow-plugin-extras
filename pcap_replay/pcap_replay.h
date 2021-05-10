@@ -21,6 +21,8 @@
 #include <pcap.h> 
 #include <time.h>
 #include <netinet/tcp.h>
+#include <sys/timerfd.h>
+
 
 #define MTU 2000 // Size of the buffer for recv() function (in bytes)
 
@@ -90,8 +92,11 @@ typedef struct _Pcap_Replay {
 
 	/* Infos used by the pcap server */
 	struct {
-		int sd_tcp; /* Socket descriptor to listen to connecting client */
-		int sd_udp; /* Socket descriptor to listen to connecting client */
+		int sd_tcp; /* TCP Socket descriptor to listen to connecting client */
+		int sd_udp; /* UDP Socket descriptor to recv from clients */
+		int tfd_sendtimer; /* timerfd to notify server to send */
+		int client_sd_tcp; /* TCP socket of the client */
+		int client_sd_udp; /* TCP socket of the client */
 	} server;
 } Pcap_Replay;
 
@@ -118,7 +123,7 @@ void _pcap_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events, int sd
 // void _pcap_server_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events);
 // void _pcap_client_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events);
 
-gboolean get_next_packet(Pcap_Replay* pcapReplay);
+gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient);
 ssize_t send_packet(Custom_Packet_t* cp, gint sd);
 gboolean change_pcap_file_to_send(Pcap_Replay* pcapReplay);
 void compute_wait_time(struct timeval tv1, struct timeval tv2, struct timespec res);
