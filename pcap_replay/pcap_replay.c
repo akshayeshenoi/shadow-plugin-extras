@@ -9,7 +9,7 @@
 const gchar* USAGE = "USAGE: <node-type> <server-host> <server-port> <pcap_client_ip> <pcap_nw_addr> <pcap_nw_mask> <timeout> <pcap_trace1> <pcap_trace2>..\n";
 
 /* pcap_activateClient() is called when the epoll descriptor has an event for the client */
-void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
+void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t event) {
 	pcapReplay->slogf(G_LOG_LEVEL_DEBUG, __FUNCTION__, "Activate client!");
  
 	char receivedPacket[MTU];
@@ -18,24 +18,33 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 
 	/* Save a pointer to the packet to send */
 	Custom_Packet_t *pckt_to_send = pcapReplay->nextPacket;
-	
+
 	/* LOG event */
-	if(events & EPOLLOUT) {
+	if(event & EPOLLOUT) {
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Client EPOLLOUT is set");
 	}
-	if(events & EPOLLIN) {
+	if(event & EPOLLIN) {
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Client EPOLLIN is set");
 	}
-	if((events & EPOLLIN) && (events & EPOLLOUT)) {
+	if((event & EPOLLIN) && (event & EPOLLOUT)) {
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Client EPOLLIN & EPOLLOUT are set");
 	}
 
-	/* Process events */ 
+	/* Process event */ 
 	if (sd == pcapReplay->client.tfd_sendtimer) { // time to send the next packet
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sending packet!");
 		Custom_Packet_t* pckt_to_send = pcapReplay->nextPacket;
 
-		numBytes = send_packet(pckt_to_send, pcapReplay->client.server_sd_tcp);
+		char message[pckt_to_send->payload_size];
+		memcpy(message, (const char*) pckt_to_send->payload, (size_t)pckt_to_send->payload_size);
+
+		if (pckt_to_send->proto == _TCP_PROTO) {
+			numBytes = send(pcapReplay->client.server_sd_tcp, message, (size_t)pckt_to_send->payload_size, 0);
+		}
+		else if(pckt_to_send->proto == _UDP_PROTO) {
+			numBytes = sendto(pcapReplay->client.server_sd_udp, message, (size_t)pckt_to_send->payload_size, 0,
+								(struct sockaddr *)&pcapReplay->client.serverAddr, sizeof(pcapReplay->client.serverAddr));
+		}
 
 		/* log result */
 		if(numBytes > 0) {
@@ -76,14 +85,16 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 
 		free(pckt_to_send);
 
-	} else if(sd == pcapReplay->client.server_sd_tcp && (events & EPOLLIN)) { // receive a message from the server
+	}
+
+	else if(sd == pcapReplay->client.server_sd_tcp && (event & EPOLLIN)) { // receive a message from the server
 		memset(receivedPacket, 0, (size_t)MTU);
 		numBytes = recv(sd, receivedPacket, (size_t)MTU, 0);
 
 		/* log result */
 		if(numBytes > 0) {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-						"Successfully received a packet from server: %d bytes", numBytes);
+						"Successfully received a TCP packet from server: %d bytes", numBytes);
 		} else if(numBytes==0) {
 			/* The connection have been closed by the distant peer. Terminate */
 			pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
@@ -91,6 +102,28 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 			shutdown_client(pcapReplay);
 		} else{
 			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Unable to receive message");
+		}
+	}
+
+	else if (sd == pcapReplay->client.server_sd_udp && (event & EPOLLIN)) { /* data on a listening socket means a new UDP message */
+		/*  Prepare to receive message */
+		memset(receivedPacket, 0, (size_t)MTU);
+		int serverLen = sizeof(pcapReplay->client.serverAddr);
+		numBytes = recvfrom(pcapReplay->client.server_sd_udp, receivedPacket, (size_t)MTU, 0, 
+							(struct sockaddr *)&pcapReplay->client.serverAddr, &serverLen);
+
+		/* log result */
+		if(numBytes > 0) {
+			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
+						"Successfully received a UDP packet from the client: %d bytes", numBytes);
+		} else if(numBytes == 0) {
+			/* What is this TODO */
+			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+						"The last packet to send was an ACK. Skipped sending.", numBytes);
+		} else {
+			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+						"Unable to send message");
+			exit(1);
 		}
 	}
 
@@ -208,7 +241,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		_pcap_init_server_sending(pcapReplay);
 	}
 
-	else if (sd == pcapReplay->server.sd_udp) { /* data on a listening socket means a new client udp connection */
+	else if (sd == pcapReplay->server.sd_udp) { /* data on a listening socket means a new UDP message */
 		/*  Prepare to receive message */
 		memset(receivedPacket, 0, (size_t)MTU);
 		int clientlen = sizeof(pcapReplay->server.clientaddr);
@@ -217,8 +250,8 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 
 		/* log result */
 		if(numBytes > 0) {
-			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-						"Successfully received a packet from the client: %d bytes", numBytes);
+			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
+						"Successfully received a UDP packet from the client: %d bytes", numBytes);
 		} else if(numBytes == 0) {
 			/* What is this TODO */
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
@@ -240,7 +273,22 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sending packet!");
 		Custom_Packet_t* pckt_to_send = pcapReplay->nextPacket;
 
-		numBytes = send_packet(pckt_to_send, pcapReplay->server.client_sd_tcp);
+		char message[pckt_to_send->payload_size];
+		memcpy(message, (const char*) pckt_to_send->payload, (size_t)pckt_to_send->payload_size);
+
+		if (pckt_to_send->proto == _TCP_PROTO) {
+			numBytes = send(pcapReplay->server.client_sd_tcp, message, (size_t)pckt_to_send->payload_size, 0);
+		}
+		else if(pckt_to_send->proto == _UDP_PROTO) {
+			// ensure we have a connection
+			if (pcapReplay->server.clientaddr.sin_port == 0) {
+				pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "No UDP connection yet!");
+				numBytes = 0; // hack
+			} else {
+				numBytes = sendto(pcapReplay->server.sd_udp, message, (size_t)pckt_to_send->payload_size, 0,
+									(struct sockaddr *)&pcapReplay->server.clientaddr, sizeof(pcapReplay->server.clientaddr));
+			}
+		}
 
 		/* log result */
 		if(numBytes > 0) {
@@ -251,7 +299,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
 						"The last packet to send was an ACK. Skipped sending.", numBytes);
 		} else {
-			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
+			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
 						"Unable to send message");
 			exit(1);
 		}
@@ -285,14 +333,14 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 	}
 
 
-	else if(events & EPOLLIN) { // receive a message from the client	
+	else if(events & EPOLLIN) { // receive a message from some TCP client
 		memset(receivedPacket, 0, (size_t)MTU);
 		numBytes = recv(sd, receivedPacket, (size_t)MTU, 0);
 
 		/* log result */
 		if(numBytes > 0) {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-					"Successfully received a message for the client: %d bytes", numBytes);
+					"Successfully received a TCP message for the client: %d bytes", numBytes);
 		} else if(numBytes == 0) {
 			/* Client closed the remote connection.. shutdown */
 			shutdown_server(pcapReplay);
@@ -321,6 +369,7 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 		return FALSE;
 	}
 
+	/************* TCP *************/
 	/* create the client socket and get a socket descriptor */
 	pcapReplay->client.server_sd_tcp = socket(AF_INET, SOCK_STREAM, 0);
 	if(pcapReplay->client.server_sd_tcp == -1) {
@@ -358,7 +407,7 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 	memset(&serverAddress, 0, sizeof(serverAddress));
 	serverAddress.sin_family = AF_INET;
 	serverAddress.sin_addr.s_addr = pcapReplay->serverIP;
-	serverAddress.sin_port =pcapReplay->serverPortTCP;
+	serverAddress.sin_port = pcapReplay->serverPortTCP;
 
 	/* connect to server. since we are blocking, we expect this to return only after connect */
 	gint res = connect(pcapReplay->client.server_sd_tcp, (struct sockaddr *) &serverAddress, sizeof(serverAddress));
@@ -375,9 +424,31 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 
 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Connected to server!");
 
-	/* specify the events to watch for on this socket.
-	 * to start out, the client wants to know when it can send a message. */
+	/* Tell Epoll to watch this socket */
 	_pcap_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLIN, pcapReplay->client.server_sd_tcp);
+
+	/************* UDP *************/
+	/* create the client socket and get a socket descriptor */
+	pcapReplay->client.server_sd_udp = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+	if(pcapReplay->client.server_sd_udp == -1) {
+		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
+					"Unable to start control socket: error in socket");
+		return FALSE;
+	}
+
+	serverAddress.sin_port = pcapReplay->serverPortUDP;
+
+	// make socket non blocking
+	res = fcntl(pcapReplay->client.server_sd_udp, F_SETFL, fcntl(pcapReplay->client.server_sd_udp, F_GETFL, 0) | O_NONBLOCK);
+	if (res == -1){
+		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__, "Error converting to nonblock");
+	}
+
+	/* Tell Epoll to watch this socket */
+	_pcap_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLIN, pcapReplay->client.server_sd_udp);
+
+	// save copy of serveraddr
+	pcapReplay->client.serverAddr = serverAddress;
 
 	return TRUE;
 }
@@ -528,6 +599,8 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 				"unable to start server: error in bind");
 		return FALSE;
 	}
+
+	memset(&pcapReplay->server.clientaddr, 0, sizeof(pcapReplay->server.clientaddr));
 
 	/* Specify the events to watch for on this socket.
 	 * To start out, the server wants to know when a client is connecting. */
@@ -841,6 +914,8 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 	u_int size_payload;
 	char *payload;
 
+	_PROTO proto;
+
 	while((size = pcap_next_ex(pcapReplay->pcap, &header, &pkt_data)) >= 0) {
 		// There exists a next packet in the pcap file
 		// Retrieve header information
@@ -856,6 +931,8 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 		// or if we're interested in tunneling udp over tcp in the case of vpn
 		if (ip->ip_p == '\x06') {
 			// tcp
+			proto = _TCP_PROTO;
+
 			// check if it is a control message and skip
 			tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip_header);
 			if (!(tcp->th_flags & TH_PUSH)) {
@@ -875,10 +952,21 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 				size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
 			}
 		}
-		else if (ip->ip_p == '\x11' && pcapReplay->isVpn) {
-			// udp over tcp
-			payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header);
-			size_payload = ntohs(ip->ip_len) - size_ip_header;
+		else if (ip->ip_p == '\x11') {
+			// udp
+			// if vpn, then encapsulate the entire UDP packet in TCP
+			if (pcapReplay->isVpn) {
+				proto = _TCP_PROTO; // underlying protocol will be tcp even if packet is udp
+
+				payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header);
+				size_payload = ntohs(ip->ip_len) - size_ip_header;
+			} else {
+				// plain udp
+				proto = _UDP_PROTO;
+
+				payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + UDP_HEADER_SIZE);
+				size_payload = ntohs(ip->ip_len) - (size_ip_header + UDP_HEADER_SIZE);
+			}
 		}
 		else {
 			// not of interest
@@ -902,6 +990,8 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 					pcapReplay->nextPacket->timestamp.tv_usec = header->ts.tv_usec;
 					pcapReplay->nextPacket->payload_size = size_payload;
 					pcapReplay->nextPacket->payload = payload;
+					pcapReplay->nextPacket->proto = proto;
+
 					break;
 				}
 			}	
@@ -923,6 +1013,7 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 					pcapReplay->nextPacket->timestamp.tv_usec = header->ts.tv_usec;
 					pcapReplay->nextPacket->payload_size = size_payload;
 					pcapReplay->nextPacket->payload = payload;
+					pcapReplay->nextPacket->proto = proto;
 					break;
 				}
 			}		
@@ -1150,14 +1241,6 @@ gboolean initiate_conn_to_proxy(Pcap_Replay* pcapReplay) {
 		return FALSE;
 	}
 	return TRUE;
-}
-
-
-ssize_t send_packet(Custom_Packet_t* cp, gint sd) {
-	// Send the payload of the custom packet through the socket sd
-	char message[cp->payload_size];
-	memcpy(message, (const char*) cp->payload, (size_t)cp->payload_size);
-	return send(sd, message, (size_t)cp->payload_size, 0);
 }
 
 gssize send_to_proxy(Pcap_Replay* pcapReplay, gpointer buffer, gsize length) {

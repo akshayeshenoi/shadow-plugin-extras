@@ -29,11 +29,17 @@
 
 typedef void (*PcapReplayLogFunc)(GLogLevelFlags level, const char* functionName, const char* format, ...);
 
+typedef enum _PROTO{
+	_TCP_PROTO,
+	_UDP_PROTO
+} _PROTO;
+
 /* Custom packets are used to store the packets we read in the pacp file */
 typedef struct Custom_Packet {
 	struct timeval timestamp;
 	char* payload;
-	gint payload_size;	
+	gint payload_size;
+	_PROTO proto;
 } Custom_Packet_t;
 
 /* all state for the pcap replayer is stored here */
@@ -88,7 +94,8 @@ typedef struct _Pcap_Replay {
 	struct {	 
 		int tfd_sendtimer; /* timerfd to notify server to send */
 		int server_sd_tcp; /* TCP socket of the server */
-		int server_sd_udp; /* TCP socket of the server */
+		int server_sd_udp; /* UDP socket of the server */
+		struct sockaddr_in serverAddr; /* Server's UDP endpoint info */
 	} client;
 
 	/* Infos used by the pcap server */
@@ -126,7 +133,6 @@ void _pcap_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events, int sd
 // void _pcap_client_epoll(Pcap_Replay* pcapReplay, gint operation, guint32 events);
 
 gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient);
-ssize_t send_packet(Custom_Packet_t* cp, gint sd);
 gboolean change_pcap_file_to_send(Pcap_Replay* pcapReplay);
 void compute_wait_time(struct timeval tv1, struct timeval tv2, struct timespec res);
 int timeval_subtract (struct timespec *result, struct timeval *y, struct timeval *x);
