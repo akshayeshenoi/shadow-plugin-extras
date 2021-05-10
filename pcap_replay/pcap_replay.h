@@ -22,6 +22,7 @@
 #include <time.h>
 #include <netinet/tcp.h>
 #include <sys/timerfd.h>
+#include <fcntl.h>
 
 
 #define MTU 2000 // Size of the buffer for recv() function (in bytes)
@@ -87,7 +88,9 @@ typedef struct _Pcap_Replay {
 	guint32 pcap_local_nw_mask;
 
 	struct {	 
-		int sd; /* Socket descriptor to connect to distant server */
+		int tfd_sendtimer; /* timerfd to notify server to send */
+		int server_sd_tcp; /* TCP socket of the server */
+		int server_sd_udp; /* TCP socket of the server */
 	} client;
 
 	/* Infos used by the pcap server */
