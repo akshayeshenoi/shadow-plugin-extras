@@ -111,7 +111,7 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t event) {
 						"The last packet to send was an ACK. Skipped sending.", numBytes);
 		} else {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-						"Unable to send message");
+						"Unable to recvfrom");
 			exit(1);
 		}
 	}
@@ -214,7 +214,10 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t event) {
 		// save reference to client
 		pcapReplay->server.client_sd_tcp = newClientSD;
 
-		_pcap_init_server_sending(pcapReplay);
+		// initialize sending if not done
+		if (!pcapReplay->isServerSending) {
+			_pcap_init_server_sending(pcapReplay);
+		}
 	}
 
 	else if (sd == pcapReplay->server.sd_udp && (event & EPOLLIN)) { /* data on a listening socket means a new UDP message */
@@ -234,12 +237,11 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t event) {
 						"The last packet to send was an ACK. Skipped sending.", numBytes);
 		} else {
 			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
-						"Unable to send message");
+						"Unable to recvfrom");
 			exit(1);
 		}
 
-		// initialize sending
-		// we add this check in the udp case because UDP is clueless about states
+		// initialize sending if not done
 		if (!pcapReplay->isServerSending) {
 			_pcap_init_server_sending(pcapReplay);
 		}
