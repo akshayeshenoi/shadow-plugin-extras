@@ -353,14 +353,6 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 		return FALSE;
 	}
 
-	/* Set TCP_NODELAY option to avoid Nagle algo */
-	int optval = 1;
-	if(setsockopt(pcapReplay->client.server_sd_tcp, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval)) != 0){
-		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
-					"Unable to set options to the socket !");
-		return FALSE;
-	}
-
 	/* get the server ip address */
 	if(g_ascii_strncasecmp(pcapReplay->serverHostName->str, "localhost", 9) == 0) {
 		pcapReplay->serverIP = htonl(INADDR_LOOPBACK);
@@ -441,14 +433,6 @@ gboolean pcap_StartClientTor(Pcap_Replay* pcapReplay) {
 		return FALSE;
 	}
 
-	/* Set TCP_NODELAY option to avoid Nagle algo */
-	int optval = 1;
-	if(setsockopt(pcapReplay->client.server_sd_tcp, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval)) != 0){
-		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
-					"Unable to set options to the socket !");
-		return FALSE;
-	}
-
 	/* our client socket address information for connecting to the Tor proxy */
 	struct sockaddr_in proxyAddress;
 	memset(&proxyAddress, 0, sizeof(proxyAddress));
@@ -507,15 +491,6 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 					"Unable to start control socket: error in socket");
 		return FALSE;
 	}
-
-	/* Set TCP_NODELAY option to avoid Nagle algo */
-	int optval = 1;
-	if(setsockopt(pcapReplay->server.sd_tcp, IPPROTO_TCP, TCP_NODELAY, (char *) &optval, sizeof(optval)) != 0){
-		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
-					"Unable to set options to the socket !");
-		return FALSE;
-	}
-
 
 	/* Setup the socket address info, client has outgoing connection to server */
 	struct sockaddr_in bindAddress;
