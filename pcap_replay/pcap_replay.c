@@ -578,6 +578,7 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	const GString* clientTor_str = g_string_new("client-tor");
 	const GString* server_str = g_string_new("server");
 	const GString* serverVpn_str = g_string_new("server-vpn");
+	const GString* serverTor_str = g_string_new("server-tor");
 
 	if(g_string_equal(nodeType,clientTor_str)) {
 		/* If tor client, get SocksPort */
@@ -685,6 +686,7 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	else if(g_string_equal(nodeType,server_str)) {
 		pcapReplay->isClient = FALSE;
 		pcapReplay->isVpn = FALSE;
+		pcapReplay->isTorClient = FALSE;
 		// Start the server (socket, bind, listen)
 		if(!pcap_StartServer(pcapReplay)) {
 			pcap_replay_free(pcapReplay);
@@ -696,6 +698,21 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	else if(g_string_equal(nodeType,serverVpn_str)) {
 		pcapReplay->isClient = FALSE;
 		pcapReplay->isVpn = TRUE;
+		pcapReplay->isTorClient = FALSE;
+		// Start the server (socket, bind, listen)
+		if(!pcap_StartServer(pcapReplay)) {
+			pcap_replay_free(pcapReplay);
+			return NULL;
+		} 	
+	}
+	/* If the first argument is equal to "server-tor" 
+	 * Then create a new server instance of the pcap replayer plugin, and set isTor to true.
+	 * The server will not forward UDP traffic.
+	 */
+	else if(g_string_equal(nodeType,serverTor_str)) {
+		pcapReplay->isClient = FALSE;
+		pcapReplay->isVpn = FALSE;
+		pcapReplay->isTorClient = TRUE;
 		// Start the server (socket, bind, listen)
 		if(!pcap_StartServer(pcapReplay)) {
 			pcap_replay_free(pcapReplay);
@@ -704,7 +721,7 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	} 
 	else{
 		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-					"First argument is not equals to either 'client'| 'client-vpn' | 'client-tor' | 'server' | 'server-vpn'. Exiting !");
+					"First argument is not equals to either 'client'| 'client-vpn' | 'client-tor' | 'server' | 'server-vpn' | 'server-tor'. Exiting !");
 		pcap_replay_free(pcapReplay);
 		return NULL;
 	}
@@ -749,6 +766,8 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	g_string_free((GString*)clientVpn_str, TRUE);
 	g_string_free((GString*)clientTor_str, TRUE);
 	g_string_free((GString*)server_str, TRUE);
+	g_string_free((GString*)serverVpn_str, TRUE);
+	g_string_free((GString*)serverTor_str, TRUE);
 
 	if(!is_instanciation_done) {
 		//pcap_replay_free(pcapReplay);
@@ -890,13 +909,7 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 		if (ip->ip_p == '\x06') {
 			// tcp
 			proto = _TCP_PROTO;
-
-			// check if it is a control message and skip
 			tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip_header);
-			if (!(tcp->th_flags & TH_PUSH)) {
-				// does not have any payload
-				continue;
-			}
 
 			// if vpn, then encapsulate the entire TCP packet
 			if (pcapReplay->isVpn) {
@@ -908,6 +921,11 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 				size_tcp_header = TH_OFF(tcp)*4;
 				payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + size_tcp_header);
 				size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
+			}
+
+			if (size_payload <= 0) {
+				// does not have any payload, probably an ACK or keep alive
+				continue;
 			}
 		}
 		else if (ip->ip_p == '\x11' && !pcapReplay->isTorClient) {
@@ -972,6 +990,7 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 					pcapReplay->nextPacket->payload_size = size_payload;
 					pcapReplay->nextPacket->payload = payload;
 					pcapReplay->nextPacket->proto = proto;
+
 					break;
 				}
 			}		
