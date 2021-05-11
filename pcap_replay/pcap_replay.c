@@ -910,6 +910,13 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 			// tcp
 			proto = _TCP_PROTO;
 			tcp = (struct sniff_tcp*)(pkt_data + SIZE_ETHERNET + size_ip_header);
+			size_tcp_header = TH_OFF(tcp)*4;
+			size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
+
+			if (size_payload <= 0) {
+				// does not have any payload, probably an ACK or keep alive
+				continue;
+			}
 
 			// if vpn, then encapsulate the entire TCP packet
 			if (pcapReplay->isVpn) {
@@ -918,14 +925,7 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 			}
 			else {
 				// only extract payload
-				size_tcp_header = TH_OFF(tcp)*4;
 				payload = (char *)(pkt_data + SIZE_ETHERNET + size_ip_header + size_tcp_header);
-				size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
-			}
-
-			if (size_payload <= 0) {
-				// does not have any payload, probably an ACK or keep alive
-				continue;
 			}
 		}
 		else if (ip->ip_p == '\x11' && !pcapReplay->isTorClient) {
