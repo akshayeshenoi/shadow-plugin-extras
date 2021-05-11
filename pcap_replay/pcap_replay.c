@@ -19,19 +19,8 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t event) {
 	/* Save a pointer to the packet to send */
 	Custom_Packet_t *pckt_to_send = pcapReplay->nextPacket;
 
-	/* LOG event */
-	if(event & EPOLLOUT) {
-		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Client EPOLLOUT is set");
-	}
-	if(event & EPOLLIN) {
-		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Client EPOLLIN is set");
-	}
-	if((event & EPOLLIN) && (event & EPOLLOUT)) {
-		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Client EPOLLIN & EPOLLOUT are set");
-	}
-
 	/* Process event */ 
-	if (sd == pcapReplay->client.tfd_sendtimer) { // time to send the next packet
+	if (sd == pcapReplay->client.tfd_sendtimer && (event & EPOLLIN)) { // time to send the next packet
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sending packet!");
 		Custom_Packet_t* pckt_to_send = pcapReplay->nextPacket;
 
@@ -97,7 +86,7 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t event) {
 						"Successfully received a TCP packet from server: %d bytes", numBytes);
 		} else if(numBytes==0) {
 			/* The connection have been closed by the distant peer. Terminate */
-			pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
+			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
 						"Server closed connection? Shutting down..");
 			shutdown_client(pcapReplay);
 		} else{
@@ -114,7 +103,7 @@ void _pcap_activateClient(Pcap_Replay* pcapReplay, gint sd, uint32_t event) {
 
 		/* log result */
 		if(numBytes > 0) {
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
+			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
 						"Successfully received a UDP packet from the client: %d bytes", numBytes);
 		} else if(numBytes == 0) {
 			/* What is this TODO */
@@ -191,28 +180,15 @@ gboolean _pcap_init_server_sending(Pcap_Replay* pcapReplay) {
 
 
 /* pcap_activateServer() is called when the epoll descriptor has an event for the server */
-void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
+void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t event) {
 	pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Activate server !");
 
 	char receivedPacket[MTU];
 	struct epoll_event ev;
 	ssize_t numBytes;
 
-	/* LOG event */
-	if(events & EPOLLOUT) {
-		pcapReplay->slogf(G_LOG_LEVEL_DEBUG, __FUNCTION__, "Server EPOLLOUT is set");
-	}
-	if(events & EPOLLIN) {
-		pcapReplay->slogf(G_LOG_LEVEL_DEBUG, __FUNCTION__, "Server EPOLLIN is set");
-	}
-	if((events & EPOLLIN) && (events & EPOLLOUT)) {
-		pcapReplay->slogf(G_LOG_LEVEL_DEBUG, __FUNCTION__, "Server EPOLLIN & EPOLLOUT are set");
-	}
-
 	/* Process events */
-	if(sd == pcapReplay->server.sd_tcp) { /* data on a listening socket means a new client tcp connection */
-		assert(events & EPOLLIN);
-
+	if(sd == pcapReplay->server.sd_tcp && (event & EPOLLIN))  { /* data on a listening socket means a new client tcp connection */
 		/* accept new connection from a remote client */
 		struct sockaddr_in clientaddr;
     	socklen_t clientaddr_size = sizeof(clientaddr);
@@ -241,7 +217,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		_pcap_init_server_sending(pcapReplay);
 	}
 
-	else if (sd == pcapReplay->server.sd_udp) { /* data on a listening socket means a new UDP message */
+	else if (sd == pcapReplay->server.sd_udp && (event & EPOLLIN)) { /* data on a listening socket means a new UDP message */
 		/*  Prepare to receive message */
 		memset(receivedPacket, 0, (size_t)MTU);
 		int clientlen = sizeof(pcapReplay->server.clientaddr);
@@ -250,7 +226,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 
 		/* log result */
 		if(numBytes > 0) {
-			pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
+			pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__,
 						"Successfully received a UDP packet from the client: %d bytes", numBytes);
 		} else if(numBytes == 0) {
 			/* What is this TODO */
@@ -269,7 +245,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		}
 	}
 
-	else if (sd == pcapReplay->server.tfd_sendtimer) { /* time to send the next packet */
+	else if (sd == pcapReplay->server.tfd_sendtimer && (event & EPOLLIN)) { /* time to send the next packet */
 		pcapReplay->slogf(G_LOG_LEVEL_MESSAGE, __FUNCTION__, "Sending packet!");
 		Custom_Packet_t* pckt_to_send = pcapReplay->nextPacket;
 
@@ -332,8 +308,7 @@ void _pcap_activateServer(Pcap_Replay* pcapReplay, gint sd, uint32_t events) {
 		free(pckt_to_send);
 	}
 
-
-	else if(events & EPOLLIN) { // receive a message from some TCP client
+	else if(event & EPOLLIN) { // receive a message from some TCP client
 		memset(receivedPacket, 0, (size_t)MTU);
 		numBytes = recv(sd, receivedPacket, (size_t)MTU, 0);
 
@@ -416,7 +391,7 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 		return FALSE;
 	}
 
-	// make socket non blocking
+	// make socket non blocking now
 	res = fcntl(pcapReplay->client.server_sd_tcp, F_SETFL, fcntl(pcapReplay->client.server_sd_tcp, F_GETFL, 0) | O_NONBLOCK);
 	if (res == -1){
 		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__, "Error converting to nonblock");
@@ -429,26 +404,20 @@ gboolean pcap_StartClient(Pcap_Replay* pcapReplay) {
 
 	/************* UDP *************/
 	/* create the client socket and get a socket descriptor */
-	pcapReplay->client.server_sd_udp = socket(AF_INET, SOCK_DGRAM | SOCK_NONBLOCK, 0);
+	// this can be non-blocking at the outset cause connectionless
+	pcapReplay->client.server_sd_udp = socket(AF_INET, (SOCK_DGRAM | SOCK_NONBLOCK), 0);
 	if(pcapReplay->client.server_sd_udp == -1) {
 		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__,
 					"Unable to start control socket: error in socket");
 		return FALSE;
 	}
 
+	// save copy of serveraddr for future sendto and recv from
 	serverAddress.sin_port = pcapReplay->serverPortUDP;
-
-	// make socket non blocking
-	res = fcntl(pcapReplay->client.server_sd_udp, F_SETFL, fcntl(pcapReplay->client.server_sd_udp, F_GETFL, 0) | O_NONBLOCK);
-	if (res == -1){
-		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__, "Error converting to nonblock");
-	}
+	pcapReplay->client.serverAddr = serverAddress;
 
 	/* Tell Epoll to watch this socket */
 	_pcap_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLIN, pcapReplay->client.server_sd_udp);
-
-	// save copy of serveraddr
-	pcapReplay->client.serverAddr = serverAddress;
 
 	return TRUE;
 }
@@ -498,22 +467,22 @@ gboolean pcap_StartClientTor(Pcap_Replay* pcapReplay) {
 	}
 	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Connected to Tor socket port 9000 !");
 
+	/* Initiate the connection to the Tor proxy.
+	 * The client needs to do the Socks5 handshake to communicate
+	 * through Tor using the proxy */
+	initiate_conn_to_proxy(pcapReplay);
+	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Connected to server!");
+
 	// make socket non blocking
 	res = fcntl(pcapReplay->client.server_sd_tcp, F_SETFL, fcntl(pcapReplay->client.server_sd_tcp, F_GETFL, 0) | O_NONBLOCK);
 	if (res == -1){
 		pcapReplay->slogf(G_LOG_LEVEL_ERROR, __FUNCTION__, "Error converting to nonblock");
 	}
 
-	/* Initiate the connection to the Tor proxy.
-	 * The client needs to do the Socks5 handshake to communicate
-	 * through Tor using the proxy */
-	initiate_conn_to_proxy(pcapReplay);
-
-	pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__, "Connected to server!");
-
-	/* specify the events to watch for on this socket.
-	 * to start out, the client wants to know when it can send a message. */
+	/* Tell Epoll to watch this socket */
 	_pcap_epoll(pcapReplay, EPOLL_CTL_ADD, EPOLLIN, pcapReplay->client.server_sd_tcp);
+
+	// NOTE Tor does not support UDP
 
 	return TRUE;
 }
@@ -819,7 +788,7 @@ void pcap_replay_ready(Pcap_Replay* pcapReplay) {
 		for(gint i = 0; i < nfds; i++) {
 			gint d = epevs[i].data.fd;
 			uint32_t e = epevs[i].events;
-			if(d == pcapReplay->client.server_sd_tcp || d == pcapReplay->client.tfd_sendtimer) {
+			if(d == pcapReplay->client.server_sd_tcp || d == pcapReplay->client.server_sd_udp || d == pcapReplay->client.tfd_sendtimer) {
 				_pcap_activateClient(pcapReplay, d, e);
 			} else {
 				_pcap_activateServer(pcapReplay, d, e);
@@ -952,8 +921,8 @@ gboolean get_next_packet(Pcap_Replay* pcapReplay, gboolean isClient) {
 				size_payload = ntohs(ip->ip_len) - (size_ip_header + size_tcp_header);
 			}
 		}
-		else if (ip->ip_p == '\x11') {
-			// udp
+		else if (ip->ip_p == '\x11' && !pcapReplay->isTorClient) {
+			// udp (tor does not support udp)
 			// if vpn, then encapsulate the entire UDP packet in TCP
 			if (pcapReplay->isVpn) {
 				proto = _TCP_PROTO; // underlying protocol will be tcp even if packet is udp
