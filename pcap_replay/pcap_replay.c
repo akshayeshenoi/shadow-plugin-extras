@@ -583,7 +583,7 @@ gboolean pcap_StartServer(Pcap_Replay* pcapReplay) {
 Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) {
 	/* Expected args:
 		./pcap_replay-exe <node-type> <server-host> <server-port> <pcap_client_ip> <pcap_nw_addr> <pcap_nw_mask> <timeout> <pcap_trace1> <pcap_trace2>.. 
-		node-type: client | client-tor | client-vpn | server
+		node-type: client | client-tor | client-vpn | server | server-vpn
 	*/
 	g_assert(slogf);
 	gboolean is_instanciation_done = FALSE; 
@@ -602,6 +602,7 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	const GString* clientVpn_str = g_string_new("client-vpn");
 	const GString* clientTor_str = g_string_new("client-tor");
 	const GString* server_str = g_string_new("server");
+	const GString* serverVpn_str = g_string_new("server-vpn");
 
 	if(g_string_equal(nodeType,clientTor_str)) {
 		/* If tor client, get SocksPort */
@@ -708,14 +709,27 @@ Pcap_Replay* pcap_replay_new(gint argc, gchar* argv[], PcapReplayLogFunc slogf) 
 	 * Then create a new server instance of the pcap replayer plugin */
 	else if(g_string_equal(nodeType,server_str)) {
 		pcapReplay->isClient = FALSE;
+		pcapReplay->isVpn = FALSE;
 		// Start the server (socket, bind, listen)
 		if(!pcap_StartServer(pcapReplay)) {
 			pcap_replay_free(pcapReplay);
 			return NULL;
 		} 	
-	} else{
+	}
+	/* If the first argument is equal to "server-vpn" 
+	 * Then create a new server instance of the pcap replayer plugin, and set isVPN to true */
+	else if(g_string_equal(nodeType,serverVpn_str)) {
+		pcapReplay->isClient = FALSE;
+		pcapReplay->isVpn = TRUE;
+		// Start the server (socket, bind, listen)
+		if(!pcap_StartServer(pcapReplay)) {
+			pcap_replay_free(pcapReplay);
+			return NULL;
+		} 	
+	} 
+	else{
 		pcapReplay->slogf(G_LOG_LEVEL_CRITICAL, __FUNCTION__,
-					"First argument is not equals to either 'client'| 'client-vpn' | 'client-tor|'server'. Exiting !");
+					"First argument is not equals to either 'client'| 'client-vpn' | 'client-tor' | 'server' | 'server-vpn'. Exiting !");
 		pcap_replay_free(pcapReplay);
 		return NULL;
 	}

@@ -5,6 +5,8 @@ The purpose of this plug-in is to replay network traffic saved in pcap files. Th
 
 We can also configure client to operate in a VPN mode where both UDP and TCP traffic is tunneled over a TCP connection - including the headers.
 
+Note that over Tor, we don't send UDP traffic since the protocol does not support it.
+
 The plug-in is bundled with an example that can serve as a starting point.
 
 Installation
@@ -20,7 +22,7 @@ The plugin is primarily driven by the arguments supplied to it.
 ./shadow-plugin-pcap_replay-exe <node-type> <server-host> <server-port> <pcap_client_ip> <pcap_nw_addr> <pcap_nw_mask> <timeout> <pcap_trace1> <pcap_trace2>.. 
 ```
 
-- **node-type**: Takes a value `client | client-tor | client-vpn | server`. If the argument is `client-tor`, the subsequent arguement must be the tor proxy port. If the argument is `client-vpn`, UDP and TCP traffic is tunneled over a TCP connection.
+- **node-type**: Takes a value `client | client-tor | client-vpn | server | server-vpn`. If the argument is `client-tor`, the subsequent arguement must be the tor proxy port. If the argument is `client-vpn`, UDP and TCP traffic is tunneled over a TCP connection. Use `server-vpn` in conjunction for reverse traffic.
 - **server-host, server-port**: The hostname and port the server binds to and the client connects to.
 - **pcap_client_ip**: The client IP and port in the pcap file that _our_ client must replay. 
 - **pcap_nw_addr, pcap_nw_mask**: The destination IP in the packet must NOT belong to this network mask (e.g., 192.168.0.0/16). We do this to simulate traffic sending to all destinations originating from a particular host.
